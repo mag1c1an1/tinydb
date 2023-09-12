@@ -1,20 +1,51 @@
-use std::{any::Any, sync::Arc};
+use std::str::FromStr;
 
-mod bool_type;
-mod numeric_type;
-
-pub enum DataTypeEnum {
+#[repr(u8)]
+#[derive(Debug,Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DataType {
     Int32,
     Bool,
     Float64,
     Char,
 }
-/// Inner data type
-pub trait DataType {
-    fn is_nullable(&self) -> bool;
-    fn get_type(&self) -> DataTypeEnum;
-    fn data_len(&self) -> u32;
-    fn as_any(&self) -> &dyn Any;
+
+impl FromStr for DataType {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "int" | "int64" | "signed" | "integer" | "intergral" | "int32" => Ok(Self::Int32),
+            "bool" | "boolean" | "logical" => Ok(Self::Bool),
+            "double" | "float8" => Ok(Self::Float64),
+            "char" | "bpchar" => Ok(Self::Char),
+            _ => todo!("parse datatype"),
+        }
+    }
 }
 
-pub(crate) type DataTypeRef = Arc<dyn DataType>;
+impl ToString for DataType {
+    fn to_string(&self) -> String {
+        match self {
+            DataType::Int32 => "INTEGER",
+            DataType::Bool => "BOOLEAN",
+            DataType::Float64 => "DOUBLE",
+            DataType::Char => "CHAR",
+        }
+        .into()
+    }
+}
+
+impl DataType {
+    pub fn data_len(&self) -> usize {
+        match self {
+            DataType::Int32 => 4,
+            DataType::Bool => 1,
+            DataType::Float64 => 8,
+            DataType::Char => 1,
+        }
+    }
+}
+
+pub(crate) type DatabaseId = u32;
+pub(crate) type SchemaId = u32;
+pub(crate) type TableId = u32;
+pub(crate) type ColumnId = u32;
