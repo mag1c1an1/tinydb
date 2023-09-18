@@ -1,6 +1,10 @@
 use bitvec::prelude::BitVec;
+use log::warn;
+use rustyline::error::ReadlineError;
+use tinydb::db::{Database, Error};
+
 pub trait Array: Send + Sync + Sized + 'static {
-    type OwnedItem: Scalar<ArrayType = Self>;
+    type OwnedItem: Scalar<ArrayType=Self>;
     type Builder: ArrayBuilder<Array=Self>;
     type RefItem<'a>: Clone + std::fmt::Debug;
     fn get(&self, idx: usize) -> Option<Self::RefItem<'_>>;
@@ -66,8 +70,26 @@ impl ArrayBuilder for StringArrayBuilder {
     }
 }
 
+impl<'a> ScalaRef<'a> for &'a str {
+    type ArrayType = StringArray;
+    type ScalarType = String;
+
+    fn to_owned_scalar(&self) -> Self::ScalarType {
+        todo!()
+    }
+}
+
+impl Scalar for String {
+    type ArrayType = StringArray;
+    type RefType<'a> = &'a str;
+
+    fn as_scalar_ref(&self) -> Self::RefType<'_> {
+        todo!()
+    }
+}
 
 impl Array for StringArray {
+    type OwnedItem = String;
     type Builder = StringArrayBuilder;
     type RefItem<'a> = &'a str;
 
@@ -115,18 +137,72 @@ impl<'a, A: Array> ArrayIterator<'a, A> {
         }
     }
 }
+
+pub trait Scalar {
+    type ArrayType: Array<OwnedItem=Self>;
+    type RefType<'a>: ScalaRef<'a, ScalarType=Self, ArrayType=Self::ArrayType> where Self: 'a;
+    fn as_scalar_ref(&self) -> Self::RefType<'_>;
 }
 
+pub trait ScalaRef<'a>: 'a {
+    type ArrayType: Array<RefItem<'a>=Self>;
+    type ScalarType: Scalar<RefType<'a>=Self>;
+    fn to_owned_scalar(&self) -> Self::ScalarType;
+}
 
-fn eval_binary<I:Array,O:Array>(i1:I,i2:O) -> O {
-  assert_eq!(i1.len(),i2.len(),"size mismatch");
+fn eval_binary<I: Array, O: Array>(i1: I, i2: O) -> O {
+    assert_eq!(i1.len(), i2.len(), "size mismatch");
     let mut builder = O::Builder::with_capacity(i1.len());
-    for(i1,i2) in i1.iter().zip(i2.iter()) {
-
-    }
+    for (i1, i2) in i1.iter().zip(i2.iter()) {}
     builder.finish()
 }
 
-fn main() {
-    println!("Hello, world!");
+struct Closure<F> {
+    data: (u8, u16),
+    func: F,
+}
+
+impl<F> Closure<F>
+    where F: Fn(&(u8, u16)) -> &u8
+{
+    fn call<'a>(&'a self) -> &'a u8 {
+        (self.func)(&self.data)
+    }
+}
+
+fn do_it<'b>(data: &'b (u8, u16)) -> &'b u8 {
+    &data.0
+}
+
+fn main() -> rustyline::Result<()> {
+    env_logger::init();
+    let db = Database::new();
+    let mut rl = rustyline::DefaultEditor::new()?;
+    if rl.load_history("history.txt").is_err() {
+        warn!("No previous history.");
+    }
+    loop {
+        let readline = rl.readline("> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str())?;
+                let ret = db.run(&line);
+                match ret {
+                    Ok(chunks) =>  {
+                        for chunk in chunks {
+                            println!("{}", chunk);
+                        }
+                    }
+                    Err(err) => println!("{}",err),
+                }
+            }
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
+                println!("Bye bye 👋");
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    rl.save_history("history.txt")?;
+    Ok(())
 }

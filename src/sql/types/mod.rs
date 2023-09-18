@@ -45,7 +45,3 @@ impl DataType {
     }
 }
 
-pub(crate) type DatabaseId = u32;
-pub(crate) type SchemaId = u32;
-pub(crate) type TableId = u32;
-pub(crate) type ColumnId = u32;

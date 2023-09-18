@@ -1,120 +1,106 @@
-use crate::catalog::{ColumnCatalog, ColumnCatalogRef, ColumnDesc};
-use crate::sql::types::{ColumnId, TableId};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::Mutex;
+use crate::catalog::column::{ColumnCatalog, ColumnDesc};
+use crate::catalog::{CatalogError, ColumnId, TableId};
 
-pub(crate) struct TableCatalog {
-    table_id: TableId,
-    table_name: String,
-    /// Mapping from column names to column ids
+pub struct TableCatalog {
+    id: TableId,
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
+    name: String,
     column_idxs: HashMap<String, ColumnId>,
-    columns: BTreeMap<ColumnId, ColumnCatalogRef>,
-    is_materialized_view: bool,
+    columns: BTreeMap<ColumnId, ColumnCatalog>,
     next_column_id: ColumnId,
 }
 
+
 impl TableCatalog {
-    pub(crate) fn add_column(
-        &mut self,
-        column_name: String,
-        column_desc: ColumnDesc,
-    ) -> Result<ColumnId, String> {
-        if self.column_idxs.contains_key(&column_name) {
-            return Err(String::from("Duplicated column names!"));
-        }
-        let column_id = self.next_column_id;
-        self.next_column_id += 1;
-        let col_catalog = Arc::new(ColumnCatalog::new(
-            column_id,
-            column_name.clone(),
-            column_desc,
-        ));
-        self.column_idxs.insert(column_name, column_id);
-        self.columns.insert(column_id, col_catalog);
-        Ok(column_id)
-    }
-
-    pub(crate) fn contains_column(&self, name: &str) -> bool {
-        self.column_idxs.contains_key(name)
-    }
-
-    pub(crate) fn all_columns(&self) -> &BTreeMap<TableId, ColumnCatalogRef> {
-        &self.columns
-    }
-
-    pub(crate) fn get_column_id_by_name(&self, name: &str) -> Option<ColumnId> {
-        self.column_idxs.get(name).cloned()
-    }
-
-    pub(crate) fn get_column_by_id(&self, table_id: TableId) -> Option<ColumnCatalogRef> {
-        self.columns.get(&table_id).cloned()
-    }
-
-    pub(crate) fn get_column_by_name(&self, name: &str) -> Option<ColumnCatalogRef> {
-        match self.get_column_id_by_name(name) {
-            Some(v) => self.get_column_by_id(v),
-            None => None,
-        }
-    }
-
-    pub(crate) fn table_name(&self) -> &str {
-        &self.table_name
-    }
-
-    pub(crate) fn table_id(&self) -> TableId {
-        self.table_id
-    }
-
-    pub(crate) fn new(
-        table_id: TableId,
-        table_name: String,
-        column_names: Vec<String>,
-        columns: Vec<ColumnDesc>,
-        is_materialized_view: bool,
+    pub(super) fn new(
+        id: TableId, name: String,
     ) -> TableCatalog {
-        let mut table_catalog = TableCatalog {
-            table_id,
-            table_name,
-            column_idxs: HashMap::new(),
-            columns: BTreeMap::new(),
-            is_materialized_view,
-            next_column_id: 0,
-        };
-        assert_eq!(column_names.len(), columns.len());
-        for (name, desc) in column_names.into_iter().zip(columns.into_iter()) {
-            table_catalog.add_column(name, desc).unwrap();
+        Self {
+            id,
+            inner: Mutex::new(Inner {
+                name,
+                column_idxs: HashMap::new(),
+                columns: BTreeMap::new(),
+                next_column_id: 0,
+            }),
         }
+    }
 
-        table_catalog
+    pub fn id(&self) -> TableId {
+        self.id
+    }
+    pub fn name(&self) -> String {
+        let inner = self.inner.lock().unwrap();
+        inner.name.clone()
+    }
+    pub fn add_column(
+        &self,
+        name: &str,
+        desc: ColumnDesc,
+    ) -> Result<ColumnId, CatalogError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.column_idxs.contains_key(name) {
+            return Err(CatalogError::Duplicated("column", name.into()));
+        }
+        let id = inner.next_column_id;
+        inner.next_column_id += 1;
+        inner.column_idxs.insert(name.into(), id);
+        inner.columns.insert(id, ColumnCatalog::new(id, name.into(), desc));
+        Ok(id)
+    }
+
+    pub fn contains_column(&self, name: &str) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.column_idxs.contains_key(name)
+    }
+
+    pub fn all_columns(&self) -> BTreeMap<TableId, ColumnCatalog> {
+        let inner = self.inner.lock().unwrap();
+        inner.columns.clone()
+    }
+
+    pub fn get_column(&self, id: ColumnId) -> Option<ColumnCatalog> {
+        let inner = self.inner.lock().unwrap();
+        inner.columns.get(&id).cloned()
+    }
+
+    pub fn get_column_by_name(&self, name: &str) -> Option<ColumnCatalog> {
+        let inner = self.inner.lock().unwrap();
+        inner.column_idxs
+            .get(name)
+            .and_then(|id| inner.columns.get(id))
+            .cloned()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::types::DataType;
+    use crate::types::{DataTypeExt, DataTypeKind};
+
     #[test]
     fn test_table_catalog() {
-        let col0 = ColumnDesc::new(DataType::Int32, true, false);
-        let col1 = ColumnDesc::new(DataType::Bool, false, false);
+        let table_catalog = TableCatalog::new(0, "t".into());
+        table_catalog.add_column("a", DataTypeKind::Int(None).not_null().to_column()).unwrap();
+        table_catalog.add_column("b", DataTypeKind::Boolean.not_null().to_column()).unwrap();
+        assert!(!table_catalog.contains_column("c"));
+        assert!(table_catalog.contains_column("a"));
+        assert!(table_catalog.contains_column("b"));
 
-        let col_names = vec![String::from("a"), String::from("b")];
-        let col_descs = vec![col0, col1];
-        let table_catalog = TableCatalog::new(0, String::from("t"), col_names, col_descs, false);
+        assert_eq!(table_catalog.get_column_by_name("a").unwrap().id(), 0);
+        assert_eq!(table_catalog.get_column_by_name("b").unwrap().id(), 1);
 
-        assert_eq!(table_catalog.contains_column("c"), false);
-        assert_eq!(table_catalog.contains_column("a"), true);
-        assert_eq!(table_catalog.contains_column("b"), true);
-
-        assert_eq!(table_catalog.get_column_id_by_name("a"), Some(0));
-        assert_eq!(table_catalog.get_column_id_by_name("b"), Some(1));
-        let col0_catalog = table_catalog.get_column_by_id(0).unwrap();
-
+        let col0_catalog = table_catalog.get_column(0).unwrap();
         assert_eq!(col0_catalog.name(), "a");
-        assert_eq!(col0_catalog.datatype(), DataType::Int32);
+        assert_eq!(col0_catalog.data_type().kind(), DataTypeKind::Int(None));
 
-        let col1_catalog = table_catalog.get_column_by_id(1).unwrap();
+        let col1_catalog = table_catalog.get_column(1).unwrap();
         assert_eq!(col1_catalog.name(), "b");
-        assert_eq!(col1_catalog.datatype(), DataType::Bool);
+        assert_eq!(col1_catalog.data_type().kind(), DataTypeKind::Boolean);
     }
 }

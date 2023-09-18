@@ -1,39 +1,48 @@
-use crate::sql::types::{DataType, ColumnId};
+use crate::catalog::ColumnId;
+use crate::types::DataType;
 
-pub(crate) struct ColumnDesc {
+#[derive(Clone)]
+pub struct ColumnDesc {
     data_type: DataType,
     is_primary: bool,
-    is_nullable: bool,
 }
+
 impl ColumnDesc {
-    pub fn new(data_type: DataType, is_primary: bool, is_nullable: bool) -> Self {
+    pub const fn new(data_type: DataType, is_primary: bool) -> Self {
         Self {
             data_type,
             is_primary,
-            is_nullable,
         }
-    }
-    pub fn set_primary(&mut self, is_primary: bool) {
-        self.is_primary = is_primary;
     }
     pub fn is_primary(&self) -> bool {
         self.is_primary
     }
     pub fn is_nullable(&self) -> bool {
-        self.is_nullable
+        self.data_type.is_nullable()
     }
-    pub fn data_type(&self) -> DataType {
-        self.data_type
+    pub fn data_type(&self) -> &DataType {
+        &self.data_type
     }
 }
-pub(crate) struct ColumnCatalog {
+
+impl DataType {
+    pub const fn to_column(self) -> ColumnDesc {
+        ColumnDesc::new(self, false)
+    }
+    pub const fn to_column_primary_key(self) -> ColumnDesc {
+        ColumnDesc::new(self, true)
+    }
+}
+
+#[derive(Clone)]
+pub struct ColumnCatalog {
     id: ColumnId,
     name: String,
     desc: ColumnDesc,
 }
 
 impl ColumnCatalog {
-    pub fn new(id: ColumnId, name: String, desc: ColumnDesc) -> Self {
+    pub(super) fn new(id: ColumnId, name: String, desc: ColumnDesc) -> Self {
         Self { id, name, desc }
     }
 
@@ -45,12 +54,8 @@ impl ColumnCatalog {
         &self.name
     }
 
-    pub fn datatype(&self) -> DataType {
-        self.desc.data_type()
-    }
-
-    pub fn set_primary(&mut self, is_primary: bool) {
-        self.desc.set_primary(is_primary);
+    pub fn data_type(&self) -> DataType {
+        self.desc.data_type.clone()
     }
 
     pub fn is_primary(&self) -> bool {

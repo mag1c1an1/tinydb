@@ -1,80 +1,79 @@
-use std::{sync::Arc, collections::{HashMap, BTreeMap}};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use crate::catalog::table::TableCatalog;
+use crate::catalog::{CatalogError, SchemaId, TableId};
 
-use crate::sql::types::{TableId, SchemaId};
 
-use super::{TableCatalogRef, TableCatalog};
+pub struct SchemaCatalog {
+    id: SchemaId,
+    inner: Mutex<Inner>,
+}
 
 
-pub(crate) struct SchemaCatalog {
-    schema_id: SchemaId,
-    schema_name: String,
+struct Inner {
+    name: String,
     table_idxs: HashMap<String, TableId>,
-    tables: BTreeMap<TableId, TableCatalogRef>,
+    tables: HashMap<TableId, Arc<TableCatalog>>,
     next_table_id: TableId,
 }
 
 impl SchemaCatalog {
-    pub(crate) fn add_table(
-        &mut self,
-        table_name: String,
-        table_catalog: TableCatalog,
-    ) -> Result<TableId, String> {
-        if self.table_idxs.contains_key(&table_name) {
-            Err(String::from("Duplicated table name!"))
-        } else {
-            let table_id = self.next_table_id;
-            self.next_table_id += 1;
-            let table_catalog = Arc::new(table_catalog);
-            self.table_idxs.insert(table_name, table_id);
-            self.tables.insert(table_id, table_catalog);
-            Ok(table_id)
-        }
-    }
-
-    pub(crate) fn delete_table(&mut self, table_name: &String) -> Result<(), String> {
-        if self.table_idxs.contains_key(table_name) {
-            let id = self.table_idxs.remove(table_name).unwrap();
-            self.tables.remove(&id);
-            Ok(())
-        } else {
-            Err(String::from("Table does not exist: ") + table_name)
-        }
-    }
-
-    pub(crate) fn get_all_tables(&self) -> &BTreeMap<TableId, TableCatalogRef> {
-        &self.tables
-    }
-
-    pub(crate) fn get_table_id_by_name(&self, name: &String) -> Option<TableId> {
-        self.table_idxs.get(name).cloned()
-    }
-
-    pub(crate) fn get_table_by_id(&self, table_id: TableId) -> Option<TableCatalogRef> {
-        self.tables.get(&table_id).cloned()
-    }
-
-    pub(crate) fn get_table_by_name(&self, name: &String) -> Option<TableCatalogRef> {
-        match self.get_table_id_by_name(name) {
-            Some(v) => self.get_table_by_id(v),
-            None => None,
-        }
-    }
-
-    pub(crate) fn get_schema_name(&self) -> String {
-        self.schema_name.clone()
-    }
-
-    pub(crate) fn get_schema_id(&self) -> SchemaId {
-        self.schema_id
-    }
-
-    pub(crate) fn new(schema_id: SchemaId, schema_name: String) -> SchemaCatalog {
+    pub(super) fn new(id: SchemaId, name: String) -> Self {
         SchemaCatalog {
-            schema_id,
-            schema_name,
-            table_idxs: HashMap::new(),
-            tables: BTreeMap::new(),
-            next_table_id: 0,
+            id,
+            inner: Mutex::new(Inner {
+                name,
+                table_idxs: HashMap::new(),
+                tables: HashMap::new(),
+                next_table_id: 0,
+            }),
         }
+    }
+    pub fn id(&self) -> SchemaId { self.id }
+    pub fn name(&self) -> String {
+        let inner = self.inner.lock().unwrap();
+        inner.name.clone()
+    }
+    pub fn add_table(&self, name: &str) -> Result<TableId, CatalogError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.table_idxs.contains_key(name) {
+            return Err(CatalogError::Duplicated("table", name.into()));
+        }
+        let id = inner.next_table_id;
+        inner.next_table_id += 1;
+        let table_catalog = Arc::new(TableCatalog::new(id, name.into()));
+        inner.table_idxs.insert(name.into(), id);
+        inner.tables.insert(id, table_catalog);
+        Ok(id)
+    }
+    pub fn del_table_by_name(&self, name: &str) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner
+            .table_idxs
+            .remove(name)
+            .ok_or_else(|| CatalogError::NotFound("table", name.into()))?;
+        inner.tables.remove(&id);
+        Ok(())
+    }
+    pub fn del_table(&self, id: TableId) {
+        let mut inner = self.inner.lock().unwrap();
+        let catalog = inner.tables.remove(&id).unwrap();
+        inner.table_idxs.remove(&catalog.name()).unwrap();
+    }
+    pub fn all_tables(&self) -> HashMap<TableId, Arc<TableCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner.tables.clone()
+    }
+    pub fn get_table(&self, id: TableId) -> Option<Arc<TableCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner.tables.get(&id).cloned()
+    }
+    pub fn get_table_by_name(&self, name: &str) -> Option<Arc<TableCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .table_idxs
+            .get(name)
+            .and_then(|id| inner.tables.get(id))
+            .cloned()
     }
 }

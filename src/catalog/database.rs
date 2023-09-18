@@ -1,79 +1,69 @@
-use std::{collections::{BTreeMap, HashMap}, sync::Arc};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use crate::catalog::{CatalogError, DEFAULT_SCHEMA_NAME, SchemaId, TableRefId};
+use crate::catalog::schema::SchemaCatalog;
+use crate::catalog::table::TableCatalog;
 
-use crate::sql::types::{DatabaseId, SchemaId};
 
-use super::{SchemaCatalogRef, SchemaCatalog};
+pub struct DatabaseCatalog {
+    inner: Mutex<Inner>,
+}
 
-pub(crate) struct DatabaseCatalog {
-    database_id: DatabaseId,
-    database_name: String,
+#[derive(Default)]
+struct Inner {
     schema_idxs: HashMap<String, SchemaId>,
-    schemas: BTreeMap<SchemaId, SchemaCatalogRef>,
+    schemas: HashMap<SchemaId, Arc<SchemaCatalog>>,
     next_schema_id: SchemaId,
 }
 
+
 impl DatabaseCatalog {
-    pub(crate) fn add_schema(
-        &mut self,
-        schema_name: String,
-        schema_catalog: SchemaCatalog,
-    ) -> Result<SchemaId, String> {
-        if self.schema_idxs.contains_key(&schema_name) {
-            Err(String::from("Duplicated schema name!"))
-        } else {
-            let schema_id = self.next_schema_id;
-            self.next_schema_id += 1;
-            let schema_catalog = Arc::new(schema_catalog);
-            self.schema_idxs.insert(schema_name, schema_id);
-            self.schemas.insert(schema_id, schema_catalog);
-            Ok(schema_id)
+    pub fn new() -> Self {
+        let db_catalog = DatabaseCatalog {
+            inner: Mutex::new(Inner::default()),
+        };
+        db_catalog.add_schema(DEFAULT_SCHEMA_NAME).unwrap();
+        db_catalog
+    }
+    pub fn add_schema(&self, name: &str) -> Result<SchemaId, CatalogError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.schema_idxs.contains_key(name) {
+            return Err(CatalogError::Duplicated("schema", name.into()));
         }
+        let id = inner.next_schema_id;
+        inner.next_schema_id += 1;
+        let schema_catalog = Arc::new(SchemaCatalog::new(id, name.into()));
+        inner.schema_idxs.insert(name.into(), id);
+        inner.schemas.insert(id, schema_catalog);
+        Ok(id)
     }
-
-    pub(crate) fn delete_schema(&mut self, schema_name: &String) -> Result<(), String> {
-        if self.schema_idxs.contains_key(schema_name) {
-            let id = self.schema_idxs.remove(schema_name).unwrap();
-            self.schemas.remove(&id);
-            Ok(())
-        } else {
-            Err(String::from("Schema does not exist: ") + schema_name)
-        }
+    pub fn del_schema(&self, name: &str) -> Result<(), CatalogError> {
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner
+            .schema_idxs
+            .remove(name)
+            .ok_or_else(|| CatalogError::NotFound("schema", name.into()))?;
+        inner.schemas.remove(&id);
+        Ok(())
     }
-
-    pub(crate) fn get_all_schemas(&self) -> &BTreeMap<SchemaId, SchemaCatalogRef> {
-        &self.schemas
+    pub fn all_schemas(&self) -> HashMap<SchemaId, Arc<SchemaCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner.schemas.clone()
     }
-
-    pub(crate) fn get_schema_id_by_name(&self, name: &String) -> Option<SchemaId> {
-        self.schema_idxs.get(name).cloned()
+    pub fn get_schema(&self, id: SchemaId) -> Option<Arc<SchemaCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner.schemas.get(&id).cloned()
     }
-
-    pub(crate) fn get_schema_by_id(&self, schema_id: SchemaId) -> Option<SchemaCatalogRef> {
-        self.schemas.get(&schema_id).cloned()
+    pub fn get_schema_by_name(&self, name: &str) -> Option<Arc<SchemaCatalog>> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .schema_idxs
+            .get(name)
+            .and_then(|id| inner.schemas.get(id))
+            .cloned()
     }
-
-    pub(crate) fn get_schema_by_name(&self, name: &String) -> Option<SchemaCatalogRef> {
-        match self.get_schema_id_by_name(name) {
-            Some(v) => self.get_schema_by_id(v),
-            None => None,
-        }
-    }
-
-    pub(crate) fn get_database_name(&self) -> String {
-        self.database_name.clone()
-    }
-
-    pub(crate) fn get_database_id(&self) -> DatabaseId {
-        self.database_id
-    }
-
-    pub(crate) fn new(database_id: DatabaseId, database_name: String) -> DatabaseCatalog {
-        DatabaseCatalog {
-            database_id,
-            database_name,
-            schema_idxs: HashMap::new(),
-            schemas: BTreeMap::new(),
-            next_schema_id: 0,
-        }
+    pub fn get_table(&self, table_ref_id: TableRefId) -> Option<Arc<TableCatalog>> {
+        let schema = self.get_schema(table_ref_id.schema_id)?;
+        schema.get_table(table_ref_id.table_id)
     }
 }
