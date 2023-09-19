@@ -10,3 +10,4 @@ pub mod db;
 mod test;
 pub mod executor;
 pub mod parser;
+pub mod binder;

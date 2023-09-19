@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use crate::catalog::database::DatabaseCatalog;
 
-mod column;
-mod database;
-mod schema;
-mod table;
+pub mod column;
+pub mod database;
+pub mod schema;
+pub mod table;
 
 pub type DatabaseId = u32;
 pub type SchemaId = u32;
